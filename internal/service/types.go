@@ -28,6 +28,11 @@ type SseEvent struct {
 		Text        string `json:"text"`
 		Thinking    string `json:"thinking"`
 		PartialJSON string `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
+		StopDetails struct {
+			Category    string `json:"category"`
+			Explanation string `json:"explanation"`
+		} `json:"stop_details"`
 	} `json:"delta"`
 	Error struct {
 		Message string `json:"message"`
@@ -40,10 +45,14 @@ type Prompt struct {
 	Images      []string
 	RawRequest  json.RawMessage
 	ForceInline bool
-	MaxTokens   int
-	Temperature *float64
-	TopP        *float64
-	Stop        []string
+	// DisableNativeTools keeps Claude.ai web tools out of the completion when
+	// the caller supplied its own tools. Native tool_use is not translated into
+	// the client protocol and otherwise comes back as an empty 200.
+	DisableNativeTools bool
+	MaxTokens          int
+	Temperature        *float64
+	TopP               *float64
+	Stop               []string
 }
 
 type CompletionResult struct {

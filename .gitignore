@@ -11,3 +11,4 @@ config.yaml
 /协议/
 
 sessionKey.txt
+.ace-tool/

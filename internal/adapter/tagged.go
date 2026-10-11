@@ -20,39 +20,25 @@ import (
 //	<think>...</think>
 //	<final_answer>给用户的最终回复</final_answer>
 
-const taggedToolPromptParallel = `Write the AI assistant's next response using only the following XML-like tags:
-
-- <think>...</think>
-- <tool_calls>[{"name":"ToolName","arguments":{...}}]</tool_calls>
-- <final_answer>...</final_answer>
+const taggedToolPromptParallel = `You can use tools. When a tool is needed, output exactly one block and then stop:
+<tool_calls>[{"name":"ToolName","arguments":{...}}]</tool_calls>
 
 Rules:
-- You may output one or more <think> blocks.
-- You must then output exactly one terminal block: either <tool_calls> or <final_answer>.
-- Do not output any text outside these tags.
-- In <tool_calls>, the content must be a valid JSON array. Each item must be an object with keys "name" and "arguments".
-- If you need only one tool, still use <tool_calls> with an array of length 1.
-- In string values inside <tool_calls>, you must escape quotes, backslashes, and newlines exactly as JSON requires.
-- After </tool_calls> or </final_answer>, stop immediately.
-- Never generate Observation, tool results, or a second terminal block in the same response.
-- Never output <observation>; the system will provide tool results in the next turn.
+- If no tool is needed, answer in normal text and do not use these tags.
+- The block must be a JSON array. Each item has "name" and "arguments".
+- Use a one-item array for a single tool.
+- Escape quotes, backslashes, and newlines inside JSON strings.
+- Do not invent tool results or continue after </tool_calls>.
 `
 
-const taggedToolPromptSingle = `Write the AI assistant's next response using only the following XML-like tags:
-
-- <think>...</think>
-- <tool_call>{"name":"ToolName","arguments":{...}}</tool_call>
-- <final_answer>...</final_answer>
+const taggedToolPromptSingle = `You can use tools. When a tool is needed, output exactly one block and then stop:
+<tool_call>{"name":"ToolName","arguments":{...}}</tool_call>
 
 Rules:
-- You may output one or more <think> blocks.
-- You must then output exactly one terminal block: either <tool_call> or <final_answer>.
-- Do not output any text outside these tags.
-- In <tool_call>, the content must be a valid JSON object with keys "name" and "arguments".
-- In string values inside <tool_call>, you must escape quotes, backslashes, and newlines exactly as JSON requires.
-- After </tool_call> or </final_answer>, stop immediately.
-- Never generate Observation, tool results, or a second terminal block in the same response.
-- Never output <observation>; the system will provide tool results in the next turn.
+- If no tool is needed, answer in normal text and do not use these tags.
+- The block must be a JSON object with "name" and "arguments".
+- Escape quotes, backslashes, and newlines inside JSON strings.
+- Do not invent tool results or continue after </tool_call>.
 `
 
 // TaggedToolCall 是解析出的单次工具调用。

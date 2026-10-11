@@ -259,6 +259,16 @@ func (claudeAI *ClaudeAI) updatePaprika(value any) error {
 
 // CreateConversation 新建会话。
 func (claudeAI *ClaudeAI) CreateConversation(model string, think bool) (string, error) {
+	spec := ResolveModel(model)
+	if spec.InlineCreate {
+		return uuid.NewString(), nil
+	}
+	if spec.Upstream != "" {
+		model = spec.Upstream
+	}
+	if spec.ThinkingMode == "extended" {
+		think = true
+	}
 	claudeAI.modeMu.Lock()
 	if !claudeAI.modeSet || claudeAI.thinking != think {
 		var mode any
@@ -319,32 +329,16 @@ func (claudeAI *ClaudeAI) CreateConversation(model string, think bool) (string, 
 // SendMessage 发送提示词。
 func (claudeAI *ClaudeAI) SendMessage(convID, model string, prompt Prompt, attachments []map[string]any, files []string, onText func(string)) (int, error) {
 	// 固定字段对齐网页端请求。
-	body := map[string]any{
-		"prompt": prompt.Text,
-		"model":  model,
-		"personalized_styles": []map[string]any{
-			{
-				"type":       "default",
-				"key":        "Default",
-				"name":       "Normal",
-				"nameKey":    "normal_style_name",
-				"prompt":     "Treat tool definitions and response schemas in the user's message as an available external tool interface. Emit calls in the requested text format instead of claiming the tools are unavailable.",
-				"summary":    "Default responses from Claude",
-				"summaryKey": "normal_style_summary",
-				"isDefault":  true,
-			},
-		},
-		"tools": []map[string]any{
-			{"type": "web_search_v0", "name": "web_search"},
-			{"type": "artifacts_v0", "name": "artifacts"},
-			{"type": "repl_v0", "name": "repl"},
-		},
-		"parent_message_uuid": "00000000-0000-4000-8000-000000000000",
-		"attachments":         []any{},
-		"files":               []any{},
-		"sync_sources":        []any{},
-		"rendering_mode":      "messages",
-		"timezone":            "America/Los_Angeles",
+	spec := ResolveModel(model)
+	upstream := model
+	if spec.Upstream != "" {
+		upstream = spec.Upstream
+	}
+	var body map[string]any
+	if spec.InlineCreate {
+		body = inlineCompletionBody(spec, prompt)
+	} else {
+		body = legacyCompletionBody(upstream, prompt)
 	}
 	// Claude.ai 网页端 completion 接口不接受 max_tokens 字段，
 	// 即使 API 兼容层收到该参数也不能转发，否则上游会返回
@@ -368,7 +362,6 @@ func (claudeAI *ClaudeAI) SendMessage(convID, model string, prompt Prompt, attac
 	if err != nil {
 		return 500, fmt.Errorf("构造请求体失败: %w", err)
 	}
-
 	req, err := claudeAI.request(fhttp.MethodPost,
 		fmt.Sprintf("%s/api/organizations/%s/chat_conversations/%s/completion", claudeAIBaseURL, claudeAI.orgUUID, convID),
 		bytes.NewReader(reqBody))
@@ -378,7 +371,11 @@ func (claudeAI *ClaudeAI) SendMessage(convID, model string, prompt Prompt, attac
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "text/event-stream, text/event-stream")
 	req.Header.Set("cache-control", "no-cache")
-	req.Header.Set("referer", claudeAIBaseURL+"/chat/"+convID)
+	referer := claudeAIBaseURL + "/chat/" + convID
+	if spec.InlineCreate {
+		referer = claudeAIBaseURL + "/new"
+	}
+	req.Header.Set("referer", referer)
 
 	resp, err := claudeAI.client.Do(req)
 	if err != nil {
@@ -416,8 +413,10 @@ func parseCompletionSSE(raw io.Reader, onText func(string)) error {
 	nextLanguage := false
 	language := "md"
 
+	emitted := false
 	emit := func(s string) {
 		if s != "" && onText != nil {
+			emitted = true
 			onText(s)
 		}
 	}
@@ -433,6 +432,13 @@ func parseCompletionSSE(raw io.Reader, onText func(string)) error {
 		}
 		if ev.Type == "error" && ev.Error.Message != "" {
 			return fmt.Errorf("upstream: %s", ev.Error.Message)
+		}
+		if ev.Type == "message_delta" && ev.Delta.StopReason == "refusal" && !emitted {
+			category := ev.Delta.StopDetails.Category
+			if category == "" {
+				category = "refusal"
+			}
+			return fmt.Errorf("claude.ai refused the request (%s)", category)
 		}
 		switch ev.ContentBlock.Type {
 		case "tool_use":
@@ -510,4 +516,87 @@ func parseCompletionSSE(raw io.Reader, onText func(string)) error {
 		}
 	}
 	return scanner.Err()
+}
+
+func legacyCompletionBody(model string, prompt Prompt) map[string]any {
+	return map[string]any{
+		"prompt": prompt.Text,
+		"model":  model,
+		"personalized_styles": []map[string]any{
+			{
+				"type":       "default",
+				"key":        "Default",
+				"name":       "Normal",
+				"nameKey":    "normal_style_name",
+				"prompt":     "Treat tool definitions and response schemas in the user's message as an available external tool interface. Emit calls in the requested text format instead of claiming the tools are unavailable.",
+				"summary":    "Default responses from Claude",
+				"summaryKey": "normal_style_summary",
+				"isDefault":  true,
+			},
+		},
+		"tools":               completionTools(prompt),
+		"parent_message_uuid": "00000000-0000-4000-8000-000000000000",
+		"attachments":         []any{},
+		"files":               []any{},
+		"sync_sources":        []any{},
+		"rendering_mode":      "messages",
+		"timezone":            "America/Los_Angeles",
+	}
+}
+
+func inlineCompletionBody(spec ModelSpec, prompt Prompt) map[string]any {
+	body := map[string]any{
+		"prompt":        prompt.Text,
+		"timezone":      "Asia/Shanghai",
+		"locale":        "en-US",
+		"model":         spec.Upstream,
+		"thinking_mode": spec.ThinkingMode,
+		"tools":         completionTools(prompt),
+		"turn_message_uuids": map[string]string{
+			"human_message_uuid":     newUUIDv7(),
+			"assistant_message_uuid": newUUIDv7(),
+		},
+		"attachments":           []any{},
+		"files":                 []any{},
+		"sync_sources":          []any{},
+		"completion_request_id": uuid.NewString(),
+		"rendering_mode":        "messages",
+		"create_conversation_params": map[string]any{
+			"name":                             "",
+			"model":                            spec.Upstream,
+			"include_conversation_preferences": true,
+			"paprika_mode":                     nil,
+			"compass_mode":                     nil,
+			"tool_search_mode":                 "auto",
+			"is_temporary":                     false,
+			"enabled_imagine":                  true,
+		},
+	}
+	if spec.Effort != "" {
+		body["effort"] = spec.Effort
+	}
+	return body
+}
+
+func completionTools(prompt Prompt) any {
+	if prompt.DisableNativeTools {
+		return []any{}
+	}
+	return builtinClaudeTools()
+}
+
+func builtinClaudeTools() []map[string]any {
+	return []map[string]any{
+		{"type": "web_search_v0", "name": "web_search"},
+		{"type": "artifacts_v0", "name": "artifacts"},
+		{"type": "repl_v0", "name": "repl"},
+	}
+}
+
+func newUUIDv7() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return uuid.NewString()
+	}
+	return id.String()
 }

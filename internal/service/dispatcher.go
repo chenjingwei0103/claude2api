@@ -110,9 +110,6 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			lease.ready = true
 		}
 
-		think := strings.HasSuffix(reqModel, "-thinking")
-		model := strings.TrimSuffix(reqModel, "-thinking")
-
 		if acct.OrgUUID == "" {
 			info, err := client.GetUserInfo()
 			if err != nil {
@@ -144,7 +141,7 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			slog.Info("[API] 提示词过长，改用附件承载", "limit", s.MaxChatHistoryLength)
 		}
 
-		convID, err := client.CreateConversation(model, think)
+		convID, err := client.CreateConversation(reqModel, false)
 		if err != nil {
 			lastErr = err
 			if s.RemoveInvalidAccount && strings.Contains(err.Error(), "account_session_invalid") {
@@ -157,7 +154,7 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 		}
 
 		prompt.Text = promptText
-		code, err := client.SendMessage(convID, model, prompt, attachments, files, wrappedOnText)
+		code, err := client.SendMessage(convID, reqModel, prompt, attachments, files, wrappedOnText)
 		res.StatusCode = code
 		if code == 429 {
 			lease.ready = false

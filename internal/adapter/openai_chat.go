@@ -14,12 +14,10 @@ import (
 func ListModels(c *gin.Context) {
 	now := time.Now().Unix()
 	data := make([]gin.H, 0)
-	for _, id := range supportedModels {
-		for _, model := range []string{id, id + "-thinking"} {
-			data = append(data, gin.H{
-				"id": model, "object": "model", "created": now, "owned_by": "anthropic",
-			})
-		}
+	for _, model := range service.PublicModels() {
+		data = append(data, gin.H{
+			"id": model, "object": "model", "created": now, "owned_by": "anthropic",
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"object": "list", "data": data})
 }

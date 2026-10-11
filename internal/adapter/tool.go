@@ -34,7 +34,7 @@ func buildToolPrompt(messages []Message, tools []map[string]any, parallel bool) 
 			parts = append(parts, fmt.Sprintf("Verbatim JSON-string result from tool call_id=%s:\n<tool_result_json>%s</tool_result_json>", message.ToolCallID, result))
 		}
 	}
-	return service.Prompt{Text: strings.Join(parts, "\n\n")}
+	return service.Prompt{Text: strings.Join(parts, "\n\n"), DisableNativeTools: true}
 }
 
 func toolChoiceInstruction(raw json.RawMessage) string {
