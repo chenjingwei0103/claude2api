@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"claude2api/internal/config"
 	"claude2api/internal/repository"
@@ -36,30 +37,28 @@ func clientFor(acct *repository.Account, proxy string) *accountClient {
 	return client
 }
 
-// pickAPIAccount 轮询可用账号。
-func pickAPIAccount() *repository.Account {
+// pickAPIAccount 轮询可用账号，跳过冷却中和本次已限额的账号。
+func pickAPIAccount(skip map[string]bool) *repository.Account {
 	accounts := repository.LoadAccounts()
-	usable := make([]repository.Account, 0, len(accounts))
+	apiIndexLock.Lock()
+	defer apiIndexLock.Unlock()
 	active := map[string]bool{}
 	for i := range accounts {
 		if AccountUsable(&accounts[i]) {
-			usable = append(usable, accounts[i])
 			active[accounts[i].Email] = true
 		}
 	}
-	apiIndexLock.Lock()
 	for email := range apiClients {
 		if !active[email] {
 			delete(apiClients, email)
 		}
 	}
+	usable := availableAccounts(accounts, pruneAndCoolingLocked(time.Now()), skip)
 	if len(usable) == 0 {
-		apiIndexLock.Unlock()
 		return nil
 	}
 	acct := usable[apiIndex%len(usable)]
 	apiIndex++
-	apiIndexLock.Unlock()
 	return &acct
 }
 
@@ -90,21 +89,31 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 	}
 
 	var lastErr error
-	for attempt := 0; attempt <= retries; attempt++ {
-		acct := pickAPIAccount()
+	var skipLimited map[string]bool
+	failed := 0
+	// 限额换号不消耗 retry_count。普通失败超过重试次数后停止。
+	for step := 0; step < 32; step++ {
+		acct := pickAPIAccount(skipLimited)
 		if acct == nil {
-			return res, fmt.Errorf("号池中没有可用账号")
+			break
 		}
 		email := acct.Email
 		res.Account = email
 		lease := clientFor(acct, s.Proxy)
 		lease.Lock()
 		client := lease.ClaudeAI
+		stop := func() bool {
+			failed++
+			return failed > retries
+		}
 		if !lease.ready {
 			if err := client.WarmUp(); err != nil {
 				lastErr = err
 				slog.Warn("[API] 初始化网页会话失败，换号重试", "email", email, "err", err)
 				lease.Unlock()
+				if stop() {
+					break
+				}
 				continue
 			}
 			lease.ready = true
@@ -116,6 +125,9 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 				lastErr = err
 				slog.Warn("[API] 查询账号信息失败，换号重试", "email", email, "err", err)
 				lease.Unlock()
+				if stop() {
+					break
+				}
 				continue
 			}
 			if info.OrgUUID != "" && email != "" {
@@ -150,6 +162,9 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			}
 			slog.Warn("[API] 建会话失败，换号重试", "email", email, "err", err)
 			lease.Unlock()
+			if stop() {
+				break
+			}
 			continue
 		}
 
@@ -184,13 +199,26 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			return res, &CompletionError{StatusCode: code, Err: fmt.Errorf("流式输出中断: %w", err)}
 		}
 		if code == 429 {
-			slog.Warn("[API] 上游返回 429", "email", email, "err", err)
-		} else {
-			slog.Warn("[API] 请求失败，换号重试", "email", email, "code", code, "err", err)
+			if skipLimited == nil {
+				skipLimited = map[string]bool{}
+			}
+			skipLimited[email] = true
+			until := rateLimitUntil(err, time.Now())
+			coolAccount(email, until)
+			slog.Warn("[API] 上游返回 429，账号进入冷却并换号", "email", email, "until", until.Format(time.RFC3339), "err", err)
+			continue
+		}
+		slog.Warn("[API] 请求失败，换号重试", "email", email, "code", code, "err", err)
+		if stop() {
+			break
 		}
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("请求失败")
+		if usableAccountsAllCooling() {
+			res.StatusCode = 429
+			return res, &CompletionError{StatusCode: 429, Err: fmt.Errorf("请求失败: 账号均在限额冷却中")}
+		}
+		return res, fmt.Errorf("号池中没有可用账号")
 	}
 	return res, &CompletionError{StatusCode: res.StatusCode, Err: fmt.Errorf("请求失败: %w", lastErr)}
 }
