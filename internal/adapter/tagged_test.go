@@ -162,3 +162,30 @@ func TestRepairKeepsValidJSONEscape(t *testing.T) {
 		t.Fatalf("command = %#v", got)
 	}
 }
+
+func TestFlattenedToolArguments(t *testing.T) {
+	raw := `<tool_calls>[{"name":"Grep","arguments":{"pattern":"arcStaffName"}},{"name":"Grep","pattern":"arcStaffName","path":"C:\\Temp"},{"name":"Glob","pattern":"shi_*","path":"C:\\Temp"}]</tool_calls>`
+	out, err := ParseTaggedOutput("先确认字段。\n" + raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.ToolCalls) != 3 {
+		t.Fatalf("got %+v", out.ToolCalls)
+	}
+	if out.ToolCalls[1].Arguments["pattern"] != "arcStaffName" || out.ToolCalls[1].Arguments["path"] != `C:\Temp` {
+		t.Fatalf("flattened = %#v", out.ToolCalls[1].Arguments)
+	}
+	if out.ToolCalls[2].Name != "Glob" || out.ToolCalls[2].Arguments["pattern"] != "shi_*" {
+		t.Fatalf("glob = %#v", out.ToolCalls[2])
+	}
+	ev := feedAll(t, "先确认字段。\n"+raw)
+	var names []string
+	for _, e := range ev {
+		if e.Type == EventToolCall {
+			names = append(names, e.Name)
+		}
+	}
+	if strings.Join(names, ",") != "Grep,Grep,Glob" {
+		t.Fatalf("stream names = %v text=%q", names, collectText(ev))
+	}
+}

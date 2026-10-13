@@ -160,19 +160,39 @@ func parseToolCallItem(payload any) (TaggedToolCall, error) {
 	if strings.TrimSpace(name) == "" {
 		return TaggedToolCall{}, fmt.Errorf("tool_call.name must be a non-empty string")
 	}
-	args, ok := obj["arguments"].(map[string]any)
-	if !ok {
-		if raw, isString := obj["arguments"].(string); isString {
-			var parsed map[string]any
-			if unmarshalToolJSON(raw, &parsed) == nil {
-				args, ok = parsed, true
-			}
-		}
-	}
+	args, ok := toolArguments(obj)
 	if !ok {
 		return TaggedToolCall{}, fmt.Errorf("tool_call.arguments must be an object")
 	}
 	return TaggedToolCall{Name: strings.TrimSpace(name), Arguments: args}, nil
+}
+
+// toolArguments accepts nested arguments, a JSON string, or parameters flattened beside name.
+// Models often emit {"name":"Grep","pattern":"...","path":"..."} and the whole tool list was
+// previously rejected because one item lacked an arguments object.
+func toolArguments(obj map[string]any) (map[string]any, bool) {
+	if raw, exists := obj["arguments"]; exists && raw != nil {
+		if args, ok := raw.(map[string]any); ok {
+			return args, true
+		}
+		if text, ok := raw.(string); ok {
+			var parsed map[string]any
+			if unmarshalToolJSON(text, &parsed) == nil {
+				return parsed, true
+			}
+		}
+		return nil, false
+	}
+	flat := map[string]any{}
+	for key, value := range obj {
+		switch key {
+		case "name", "id", "type", "arguments":
+			continue
+		default:
+			flat[key] = value
+		}
+	}
+	return flat, true
 }
 
 // parseToolCallBlock 解析单对象形式 <tool_call>{...}</tool_call>。
