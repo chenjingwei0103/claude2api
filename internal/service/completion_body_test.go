@@ -41,3 +41,20 @@ func TestRefusalWithoutTextIsError(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestUpstreamBodyDropsSamplingFields(t *testing.T) {
+	temp := 0.2
+	top := 0.9
+	_, body := upstreamCompletionBody("claude-sonnet-5-5-thinking-high", Prompt{
+		Text:        "hi",
+		Temperature: &temp,
+		TopP:        &top,
+		Stop:        []string{"STOP"},
+		MaxTokens:   100,
+	})
+	for _, key := range []string{"temperature", "top_p", "stop_sequences", "max_tokens"} {
+		if _, ok := body[key]; ok {
+			t.Fatalf("网页接口不应转发 %s", key)
+		}
+	}
+}

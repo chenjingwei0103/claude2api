@@ -194,6 +194,7 @@ func (s *chatStream) send(delta gin.H, finish any) {
 
 func openAIStream(c *gin.Context, model string, prompt service.Prompt) {
 	stream := newChatStream(c, model)
+	defer stream.startKeepAlive(10 * time.Second)()
 	stream.send(gin.H{"role": "assistant"}, nil)
 	_, err := runAndCollect("chat/completions", model, true, prompt, func(text string) {
 		stream.send(gin.H{"content": text}, nil)
@@ -261,6 +262,7 @@ func openAIToolNonStream(c *gin.Context, model string, prompt service.Prompt) {
 // openAIToolStream 带 tools 的流式：把标签事件转成 OpenAI delta。
 func openAIToolStream(c *gin.Context, model string, prompt service.Prompt) {
 	stream := newChatStream(c, model)
+	defer stream.startKeepAlive(10 * time.Second)()
 	stopReason := "stop"
 	toolIndex := 0
 

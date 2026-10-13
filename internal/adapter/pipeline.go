@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -217,6 +218,7 @@ func (f *outputFilter) push(text string, final bool) string {
 }
 
 type sseWriter struct {
+	mu      sync.Mutex
 	w       gin.ResponseWriter
 	flusher http.Flusher
 }
@@ -229,11 +231,55 @@ func newSSE(c *gin.Context) *sseWriter {
 	h.Set("X-Accel-Buffering", "no")
 	c.Writer.WriteHeader(http.StatusOK)
 	flusher, _ := c.Writer.(http.Flusher)
-	return &sseWriter{c.Writer, flusher}
+	return &sseWriter{w: c.Writer, flusher: flusher}
+}
+
+// startKeepAlive sends Anthropic ping events while the upstream is silent.
+// Claude Code treats a quiet stream as a network failure and then waits minutes to retry.
+func (s *sseWriter) startKeepAlive(interval time.Duration) func() {
+	if s == nil {
+		return func() {}
+	}
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				s.ping()
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(stop)
+			<-done
+		})
+	}
+}
+
+func (s *sseWriter) ping() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Fprint(s.w, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
 }
 
 func (s *sseWriter) write(prefix string, payload any) {
 	b, _ := json.Marshal(payload)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	fmt.Fprintf(s.w, "%s%s\n\n", prefix, b)
 	if s.flusher != nil {
 		s.flusher.Flush()
@@ -247,6 +293,8 @@ func (s *sseWriter) event(name string, payload any) {
 }
 
 func (s *sseWriter) done() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	fmt.Fprint(s.w, "data: [DONE]\n\n")
 	if s.flusher != nil {
 		s.flusher.Flush()

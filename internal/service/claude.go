@@ -329,29 +329,7 @@ func (claudeAI *ClaudeAI) CreateConversation(model string, think bool) (string, 
 // SendMessage 发送提示词。
 func (claudeAI *ClaudeAI) SendMessage(convID, model string, prompt Prompt, attachments []map[string]any, files []string, onText func(string)) (int, error) {
 	// 固定字段对齐网页端请求。
-	spec := ResolveModel(model)
-	upstream := model
-	if spec.Upstream != "" {
-		upstream = spec.Upstream
-	}
-	var body map[string]any
-	if spec.InlineCreate {
-		body = inlineCompletionBody(spec, prompt)
-	} else {
-		body = legacyCompletionBody(upstream, prompt)
-	}
-	// Claude.ai 网页端 completion 接口不接受 max_tokens 字段，
-	// 即使 API 兼容层收到该参数也不能转发，否则上游会返回
-	// "max_tokens: Extra inputs are not permitted"。
-	if prompt.Temperature != nil {
-		body["temperature"] = *prompt.Temperature
-	}
-	if prompt.TopP != nil {
-		body["top_p"] = *prompt.TopP
-	}
-	if len(prompt.Stop) > 0 {
-		body["stop_sequences"] = prompt.Stop
-	}
+	spec, body := upstreamCompletionBody(model, prompt)
 	if len(attachments) > 0 {
 		body["attachments"] = attachments
 	}
@@ -516,6 +494,21 @@ func parseCompletionSSE(raw io.Reader, onText func(string)) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// upstreamCompletionBody 只保留网页 completion 接受的字段。
+// max_tokens、temperature、top_p、stop_sequences 会让上游返回
+// "Extra inputs are not permitted"。
+func upstreamCompletionBody(model string, prompt Prompt) (ModelSpec, map[string]any) {
+	spec := ResolveModel(model)
+	upstream := model
+	if spec.Upstream != "" {
+		upstream = spec.Upstream
+	}
+	if spec.InlineCreate {
+		return spec, inlineCompletionBody(spec, prompt)
+	}
+	return spec, legacyCompletionBody(upstream, prompt)
 }
 
 func legacyCompletionBody(model string, prompt Prompt) map[string]any {

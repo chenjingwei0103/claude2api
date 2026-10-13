@@ -122,3 +122,43 @@ func TestOutputOptions(t *testing.T) {
 		t.Fatalf("max_tokens 过滤失败: %q", got)
 	}
 }
+
+func toolArgs(ev []TaggedStreamEvent) map[string]any {
+	for _, e := range ev {
+		if e.Type == EventToolCall {
+			return e.Arguments
+		}
+	}
+	return nil
+}
+
+func TestParsePreambleAndWindowsPath(t *testing.T) {
+	raw := "先看一下这个文件\n" + `<tool_calls>[{"name":"Read","arguments":{"path":"C:\imports\data.json"}}]</tool_calls>`
+	out := ParseTaggedOutputTolerant(raw)
+	if !out.IsToolCall() || len(out.ToolCalls) != 1 || out.ToolCalls[0].Name != "Read" {
+		t.Fatalf("should parse tool call, got %+v", out)
+	}
+	if got := out.ToolCalls[0].Arguments["path"]; got != "C:\\imports\\data.json" {
+		t.Fatalf("path = %#v", got)
+	}
+}
+
+func TestStreamWindowsPathToolCall(t *testing.T) {
+	ev := feedAll(t, "先看一下\n", `<tool_calls>[{"name":"Bash","arguments":{"command":"dir C:\imports"}}]</tool_calls>`)
+	if !hasToolCall(ev) {
+		t.Fatalf("should parse tool call, text=%q", collectText(ev))
+	}
+	if got := toolArgs(ev)["command"]; got != "dir C:\\imports" {
+		t.Fatalf("command = %#v", got)
+	}
+}
+
+func TestRepairKeepsValidJSONEscape(t *testing.T) {
+	out, err := ParseTaggedOutput(`<tool_call>{"name":"Bash","arguments":{"command":"echo hi\nthere"}}</tool_call>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out.ToolCalls[0].Arguments["command"]; got != "echo hi\nthere" {
+		t.Fatalf("command = %#v", got)
+	}
+}

@@ -162,15 +162,85 @@ func parseToolCallItem(payload any) (TaggedToolCall, error) {
 	}
 	args, ok := obj["arguments"].(map[string]any)
 	if !ok {
+		if raw, isString := obj["arguments"].(string); isString {
+			var parsed map[string]any
+			if unmarshalToolJSON(raw, &parsed) == nil {
+				args, ok = parsed, true
+			}
+		}
+	}
+	if !ok {
 		return TaggedToolCall{}, fmt.Errorf("tool_call.arguments must be an object")
 	}
 	return TaggedToolCall{Name: strings.TrimSpace(name), Arguments: args}, nil
 }
 
 // parseToolCallBlock 解析单对象形式 <tool_call>{...}</tool_call>。
+func unmarshalToolJSON(raw string, dest any) error {
+	if err := json.Unmarshal([]byte(raw), dest); err == nil {
+		return nil
+	}
+	repaired := repairLooseJSONStrings(raw)
+	return json.Unmarshal([]byte(repaired), dest)
+}
+
+// repairLooseJSONStrings 把字符串里的非法反斜杠转成转义。
+// 模型经常直接写 Windows 路径，例如 C:\imports，其中 \i 不是合法 JSON 转义。
+func repairLooseJSONStrings(raw string) string {
+	var b strings.Builder
+	b.Grow(len(raw) + 8)
+	inString := false
+	escaped := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if !inString {
+			if c == '"' {
+				inString = true
+			}
+			b.WriteByte(c)
+			continue
+		}
+		if escaped {
+			valid := c == '"' || c == '\\' || c == '/' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't'
+			if c == 'u' && i+4 < len(raw) && isHex(raw[i+1:i+5]) {
+				valid = true
+			}
+			b.WriteByte('\\')
+			if !valid {
+				b.WriteByte('\\')
+			}
+			b.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inString = false
+		}
+		b.WriteByte(c)
+	}
+	if escaped {
+		b.WriteString("\\\\")
+	}
+	return b.String()
+}
+
+func isHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 func parseToolCallBlock(rawJSON string) ([]TaggedToolCall, error) {
 	var payload any
-	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
+	if err := unmarshalToolJSON(rawJSON, &payload); err != nil {
 		return nil, fmt.Errorf("invalid tool_call json: %w", err)
 	}
 	tc, err := parseToolCallItem(payload)
@@ -183,7 +253,7 @@ func parseToolCallBlock(rawJSON string) ([]TaggedToolCall, error) {
 // parseToolCallsBlock 解析数组形式 <tool_calls>[...]</tool_calls>。
 func parseToolCallsBlock(rawJSON string) ([]TaggedToolCall, error) {
 	var payload any
-	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
+	if err := unmarshalToolJSON(rawJSON, &payload); err != nil {
 		return nil, fmt.Errorf("invalid tool_calls json: %w", err)
 	}
 	arr, ok := payload.([]any)
@@ -280,7 +350,14 @@ func ParseTaggedOutput(text string) (TaggedOutput, error) {
 		case isSpace(content[pos]):
 			pos++
 		default:
-			return TaggedOutput{}, fmt.Errorf("text outside tags is not allowed")
+			next := nextTaggedBlock(content, pos)
+			if next < 0 {
+				return TaggedOutput{}, fmt.Errorf("text outside tags is not allowed")
+			}
+			if extra := strings.TrimSpace(content[pos:next]); extra != "" {
+				thinkingBlocks = append(thinkingBlocks, extra)
+			}
+			pos = next
 		}
 	}
 
@@ -306,6 +383,19 @@ func ParseTaggedOutputTolerant(text string) TaggedOutput {
 		FinalAnswer: strings.TrimSpace(text),
 		HasFinal:    true,
 	}
+}
+
+func nextTaggedBlock(content string, pos int) int {
+	best := -1
+	for _, tag := range []string{"<think>", "<tool_calls>", "<tool_call>", "<final_answer>"} {
+		if i := strings.Index(content[pos:], tag); i >= 0 {
+			abs := pos + i
+			if best < 0 || abs < best {
+				best = abs
+			}
+		}
+	}
+	return best
 }
 
 func isSpace(b byte) bool {
