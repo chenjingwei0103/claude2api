@@ -28,14 +28,6 @@ var effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
 // Order matches the account model strip: base, thinking, then effort levels.
 var modelFamilies = []modelFamily{
 	{
-		id: "claude-opus-5-5", aliases: []string{"claude-opus-5.5"},
-		listed:     []string{"low", "medium", "high", "xhigh", "max"},
-		useEffort:  true,
-		baseMode:   "auto",
-		baseEffort: "medium",
-		thinkMode:  "auto", thinkEffort: "medium",
-	},
-	{
 		id: "claude-sonnet-5-5", aliases: []string{"claude-sonnet-5.5"},
 		listed:     []string{"low", "medium", "high", "xhigh", "max"},
 		useEffort:  true,
@@ -57,6 +49,14 @@ var modelFamilies = []modelFamily{
 		useEffort:  true,
 		baseMode:   "off",
 		baseEffort: "low",
+		thinkMode:  "auto", thinkEffort: "medium",
+	},
+	{
+		id: "claude-haiku-5-5", aliases: []string{"claude-haiku-5.5"},
+		listed:     []string{"low", "medium", "high", "xhigh", "max"},
+		useEffort:  true,
+		baseMode:   "auto",
+		baseEffort: "medium",
 		thinkMode:  "auto", thinkEffort: "medium",
 	},
 	{
