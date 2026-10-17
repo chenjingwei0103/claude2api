@@ -20,25 +20,35 @@ import (
 //	<think>...</think>
 //	<final_answer>给用户的最终回复</final_answer>
 
-const taggedToolPromptParallel = `You can use tools. When a tool is needed, output exactly one block and then stop:
+const taggedToolPromptParallel = `You have external tools. Every response must contain exactly one terminal block and then stop:
 <tool_calls>[{"name":"ToolName","arguments":{...}}]</tool_calls>
 
+or:
+<final_answer>Reply for the user</final_answer>
+
 Rules:
-- If no tool is needed, answer in normal text and do not use these tags.
+- Use <tool_calls> whenever another external action is needed to complete the task.
+- Use <final_answer> only after the task is complete or no tool can advance it.
 - The block must be a JSON array. Each item has "name" and "arguments".
 - Use a one-item array for a single tool.
 - Escape quotes, backslashes, and newlines inside JSON strings.
 - Do not invent tool results or continue after </tool_calls>.
+- Do not emit ordinary prose outside these blocks.
 `
 
-const taggedToolPromptSingle = `You can use tools. When a tool is needed, output exactly one block and then stop:
+const taggedToolPromptSingle = `You have external tools. Every response must contain exactly one terminal block and then stop:
 <tool_call>{"name":"ToolName","arguments":{...}}</tool_call>
 
+or:
+<final_answer>Reply for the user</final_answer>
+
 Rules:
-- If no tool is needed, answer in normal text and do not use these tags.
+- Use <tool_call> whenever another external action is needed to complete the task.
+- Use <final_answer> only after the task is complete or no tool can advance it.
 - The block must be a JSON object with "name" and "arguments".
 - Escape quotes, backslashes, and newlines inside JSON strings.
 - Do not invent tool results or continue after </tool_call>.
+- Do not emit ordinary prose outside these blocks.
 `
 
 // TaggedToolCall 是解析出的单次工具调用。
@@ -140,14 +150,18 @@ func mapField(m map[string]any, key string) map[string]any {
 // FormatTaggedPrompt 构造标签协议的系统前缀。
 func FormatTaggedPrompt(tools []map[string]any, allowParallel bool) string {
 	toolsText := FormatToolsForPrompt(tools)
-	base := taggedToolPromptParallel
-	if !allowParallel {
-		base = taggedToolPromptSingle
-	}
+	base := taggedToolProtocol(allowParallel)
 	if toolsText != "" {
 		return base + "\n\n---\n\n## Available tools\n\n" + toolsText + "\n"
 	}
 	return base
+}
+
+func taggedToolProtocol(allowParallel bool) string {
+	if !allowParallel {
+		return taggedToolPromptSingle
+	}
+	return taggedToolPromptParallel
 }
 
 // parseToolCallItem 校验并转换单个工具调用。

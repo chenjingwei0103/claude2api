@@ -63,7 +63,12 @@ func buildPrompt(messages []Message, images []string, tools []map[string]any, pa
 			}
 		}
 		prompt = buildToolPrompt(cleaned, tools, parallel)
-		prompt.Text += toolChoiceInstruction(toolChoice)
+		instruction := toolChoiceInstruction(toolChoice)
+		prompt.Text += instruction
+		if prompt.LongContext != nil {
+			prompt.LongContext.InlineText += instruction
+			prompt.LongContext.CompactInlineText += instruction
+		}
 	} else {
 		var text strings.Builder
 		for _, message := range messages {

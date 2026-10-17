@@ -16,7 +16,24 @@ type ToolCall struct {
 }
 
 func buildToolPrompt(messages []Message, tools []map[string]any, parallel bool) service.Prompt {
+	conversation := formatToolConversation(messages, parallel)
 	parts := []string{FormatTaggedPrompt(tools, parallel)}
+	if conversation != "" {
+		parts = append(parts, conversation)
+	}
+	return service.Prompt{
+		Text:               strings.Join(parts, "\n\n"),
+		DisableNativeTools: true,
+		LongContext: &service.LongContextPlan{
+			InlineText:        toolAttachmentController(tools, parallel),
+			CompactInlineText: toolAttachmentControllerBase(parallel),
+			Attachments:       toolContextAttachments(tools, conversation),
+		},
+	}
+}
+
+func formatToolConversation(messages []Message, parallel bool) string {
+	parts := make([]string, 0, len(messages))
 	for _, message := range messages {
 		switch message.Role {
 		case "system":
@@ -34,7 +51,70 @@ func buildToolPrompt(messages []Message, tools []map[string]any, parallel bool) 
 			parts = append(parts, fmt.Sprintf("Verbatim JSON-string result from tool call_id=%s:\n<tool_result_json>%s</tool_result_json>", message.ToolCallID, result))
 		}
 	}
-	return service.Prompt{Text: strings.Join(parts, "\n\n"), DisableNativeTools: true}
+	return strings.Join(parts, "\n\n")
+}
+
+func toolContextAttachments(tools []map[string]any, conversation string) []service.TextAttachment {
+	return []service.TextAttachment{
+		{
+			FileName: "tool-catalog.txt",
+			FileType: "text/plain",
+			Content:  FormatToolsForPrompt(tools),
+		},
+		{
+			FileName: "conversation.txt",
+			FileType: "text/plain",
+			Content:  conversation,
+		},
+	}
+}
+
+func toolAttachmentController(tools []map[string]any, parallel bool) string {
+	controller := toolAttachmentControllerBase(parallel)
+	if names := compactToolNameIndex(tools, 4096); names != "" {
+		return controller + "\n\nTool name index (the catalog attachment is complete): " + names
+	}
+	return controller
+}
+
+func toolAttachmentControllerBase(parallel bool) string {
+	parts := []string{
+		taggedToolProtocol(parallel),
+		"tool-catalog.txt contains the current callable tool catalog for this request. It is authoritative and is not quoted conversation history.",
+		"conversation.txt contains the current conversation and pending user task. Continue that task. Do not claim tools are unavailable while a matching tool is listed in tool-catalog.txt.",
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func compactToolNameIndex(tools []map[string]any, maxBytes int) string {
+	var names strings.Builder
+	for _, tool := range tools {
+		definition := tool
+		if toolType, _ := tool["type"].(string); toolType == "function" {
+			if function, ok := tool["function"].(map[string]any); ok {
+				definition = function
+			}
+		}
+		name, _ := definition["name"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		separator := ""
+		if names.Len() > 0 {
+			separator = ", "
+		}
+		if names.Len()+len(separator)+len(name) > maxBytes {
+			const omission = ", …"
+			if names.Len() > 0 && names.Len()+len(omission) <= maxBytes {
+				names.WriteString(omission)
+			}
+			break
+		}
+		names.WriteString(separator)
+		names.WriteString(name)
+	}
+	return names.String()
 }
 
 func toolChoiceInstruction(raw json.RawMessage) string {

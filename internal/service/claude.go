@@ -215,12 +215,26 @@ func (claudeAI *ClaudeAI) DeleteConversation(convID string) {
 
 // BigContextAttachment 构造长上下文附件。
 func (claudeAI *ClaudeAI) BigContextAttachment(text string) []map[string]any {
-	return []map[string]any{{
-		"file_name":         "context.txt",
-		"file_type":         "text/plain",
-		"file_size":         len(text),
-		"extracted_content": text,
-	}}
+	return claudeAI.TextAttachments([]TextAttachment{{
+		FileName: "context.txt",
+		FileType: "text/plain",
+		Content:  text,
+	}})
+}
+
+// TextAttachments converts in-memory text attachment plans to Claude.ai's
+// completion payload shape.
+func (claudeAI *ClaudeAI) TextAttachments(items []TextAttachment) []map[string]any {
+	attachments := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		attachments = append(attachments, map[string]any{
+			"file_name":         item.FileName,
+			"file_type":         item.FileType,
+			"file_size":         len(item.Content),
+			"extracted_content": item.Content,
+		})
+	}
+	return attachments
 }
 
 // updatePaprika 切换思考模式。

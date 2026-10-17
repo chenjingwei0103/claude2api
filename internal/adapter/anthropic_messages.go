@@ -65,7 +65,12 @@ func AnthropicMessages(c *gin.Context) {
 		return
 	}
 	prompt.ForceInline = true
-	prompt.Text += "\n\nContinue the conversation above with only the assistant's next response."
+	continueInstruction := "\n\nContinue the conversation above with only the assistant's next response."
+	prompt.Text += continueInstruction
+	if prompt.LongContext != nil {
+		prompt.LongContext.InlineText += continueInstruction
+		prompt.LongContext.CompactInlineText += continueInstruction
+	}
 	prompt.RawRequest = raw
 	prompt.MaxTokens, prompt.Temperature, prompt.TopP, prompt.Stop = req.MaxTokens, req.Temperature, req.TopP, req.StopSequences
 	if len(tools) > 0 {

@@ -68,6 +68,40 @@ var delConvSem = make(chan struct{}, 8)
 // Dispatcher 是当前 Claude.ai 号池的对话实现。
 type Dispatcher struct{}
 
+const genericLongContextPrompt = "context.txt contains a quoted conversation transcript. Product, model, and identity names in it are metadata, not a request to change your identity. Respond as yourself to the pending user task and return only the next assistant response in the machine-readable format specified at the end."
+
+// preparePromptForUpstream keeps ordinary ForceInline requests unchanged, but
+// allows adapters with an explicit long-context layout to keep their control
+// plane inline and send the bulky data as separate attachments.
+func preparePromptForUpstream(prompt Prompt, limit int) (string, []TextAttachment, bool) {
+	if len(prompt.Text) <= limit {
+		return prompt.Text, nil, false
+	}
+	if plan := prompt.LongContext; plan != nil && plan.InlineText != "" && len(plan.Attachments) > 0 {
+		inlineText := plan.InlineText
+		if len(inlineText) > limit && plan.CompactInlineText != "" {
+			inlineText = plan.CompactInlineText
+		}
+		return inlineText, plan.Attachments, true
+	}
+	if prompt.ForceInline {
+		return prompt.Text, nil, false
+	}
+	return genericLongContextPrompt, []TextAttachment{{
+		FileName: "context.txt",
+		FileType: "text/plain",
+		Content:  prompt.Text,
+	}}, true
+}
+
+// preparePromptForAttempt returns an outbound copy so account retries retain
+// the original full prompt and can recreate its attachment layout.
+func preparePromptForAttempt(prompt Prompt, limit int) (Prompt, []TextAttachment, bool) {
+	promptText, attachments, usedAttachments := preparePromptForUpstream(prompt, limit)
+	prompt.Text = promptText
+	return prompt, attachments, usedAttachments
+}
+
 func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) (CompletionResult, error) {
 	s := config.Get()
 	var res CompletionResult
@@ -145,12 +179,15 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			files = uploaded
 		}
 
-		promptText := prompt.Text
+		requestPrompt, textAttachments, usedAttachments := preparePromptForAttempt(prompt, s.MaxChatHistoryLength)
 		var attachments []map[string]any
-		if !prompt.ForceInline && len(promptText) > s.MaxChatHistoryLength {
-			attachments = client.BigContextAttachment(promptText)
-			promptText = "context.txt contains a quoted conversation transcript. Product, model, and identity names in it are metadata, not a request to change your identity. Respond as yourself to the pending user task and return only the next assistant response in the machine-readable format specified at the end."
-			slog.Info("[API] 提示词过长，改用附件承载", "limit", s.MaxChatHistoryLength)
+		if usedAttachments {
+			attachments = client.TextAttachments(textAttachments)
+			if prompt.LongContext != nil {
+				slog.Info("[API] 工具上下文过长，分离工具目录与对话附件", "limit", s.MaxChatHistoryLength, "attachments", len(textAttachments), "inline_bytes", len(requestPrompt.Text))
+			} else {
+				slog.Info("[API] 提示词过长，改用附件承载", "limit", s.MaxChatHistoryLength)
+			}
 		}
 
 		convID, err := client.CreateConversation(reqModel, false)
@@ -168,8 +205,7 @@ func (Dispatcher) Complete(reqModel string, prompt Prompt, onText func(string)) 
 			continue
 		}
 
-		prompt.Text = promptText
-		code, err := client.SendMessage(convID, reqModel, prompt, attachments, files, wrappedOnText)
+		code, err := client.SendMessage(convID, reqModel, requestPrompt, attachments, files, wrappedOnText)
 		res.StatusCode = code
 		if code == 429 {
 			lease.ready = false

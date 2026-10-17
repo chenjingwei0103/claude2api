@@ -45,6 +45,11 @@ type Prompt struct {
 	Images      []string
 	RawRequest  json.RawMessage
 	ForceInline bool
+	// LongContext provides an explicit attachment layout when Text exceeds the
+	// configured inline limit. It lets protocol adapters keep their control
+	// instructions inline while moving large catalogs and conversation history
+	// into distinct attachments.
+	LongContext *LongContextPlan
 	// DisableNativeTools keeps Claude.ai web tools out of the completion when
 	// the caller supplied its own tools. Native tool_use is not translated into
 	// the client protocol and otherwise comes back as an empty 200.
@@ -53,6 +58,22 @@ type Prompt struct {
 	Temperature        *float64
 	TopP               *float64
 	Stop               []string
+}
+
+// TextAttachment is a text-only Claude.ai attachment assembled in memory.
+// It is not written to the local filesystem.
+type TextAttachment struct {
+	FileName string
+	FileType string
+	Content  string
+}
+
+// LongContextPlan describes the replacement inline prompt and attachments to
+// use when a prompt is too large for direct submission.
+type LongContextPlan struct {
+	InlineText        string
+	CompactInlineText string // Drops optional hints when the configured limit is smaller.
+	Attachments       []TextAttachment
 }
 
 type CompletionResult struct {
